@@ -109,7 +109,7 @@ class CaptioningRNN(object):
 
         # Input-to-hidden, hidden-to-hidden, and biases for the RNN
         Wx, Wh, b = self.params['Wx'], self.params['Wh'], self.params['b']
-
+        
         # Weight and bias for the hidden-to-vocab transformation.
         W_vocab, b_vocab = self.params['W_vocab'], self.params['b_vocab']
 
@@ -140,14 +140,21 @@ class CaptioningRNN(object):
         ##### FORWARD STEP #####
         h0 = features.dot(W_proj) + b_proj   # (1)  (N, H)
         word_embed, cache_word_embed = word_embedding_forward(captions_in, W_embed)  # (2)  (N, T, W)
-        hidd_states, cache_rnn_fw = rnn_forward(word_embed, h0, Wx, Wh, b)  # (3)  (N, T, H)
+        if self.cell_type == "rnn":
+            hidd_states, cache_rnn_fw = rnn_forward(word_embed, h0, Wx, Wh, b)  # (3)  (N, T, H)
+        elif self.cell_type == "lstm":
+            hidd_states, cache_rnn_fw = lstm_forward(word_embed, h0, Wx, Wh, b)  # (3)  (N, T, H)
         out_affine, cache_affine = temporal_affine_forward(hidd_states, W_vocab, b_vocab)  # (4) (N, T, V)
         loss, dout = temporal_softmax_loss(out_affine, captions_out, mask, verbose=False) # (5) yeah!
 
         ##### BACKWARD STEP #####
        
         dhidd_states, grads["W_vocab"], grads["b_vocab"] = temporal_affine_backward(dout, cache_affine) # (4)
-        dword_embed, dh0, grads["Wx"], grads["Wh"], grads["b"] = rnn_backward(dhidd_states, cache_rnn_fw) # (3)
+        if self.cell_type == "rnn":
+            dword_embed, dh0, grads["Wx"], grads["Wh"], grads["b"] = rnn_backward(dhidd_states, cache_rnn_fw) # (3)
+        elif self.cell_type == "lstm":
+            dword_embed, dh0, grads["Wx"], grads["Wh"], grads["b"] = lstm_backward(dhidd_states, cache_rnn_fw) # (3)
+            
         grads["W_embed"] = word_embedding_backward(dword_embed, cache_word_embed)  # (2)
         
         grads["b_proj"] = dh0.sum(axis=0)  # (1)
@@ -184,14 +191,19 @@ class CaptioningRNN(object):
           where each element is an integer in the range [0, V). The first element
           of captions should be the first sampled word, not the <START> token.
         """
-        N = features.shape[0]
-        captions = self._null * np.ones((N, max_length), dtype=np.int32)
 
         # Unpack parameters
         W_proj, b_proj = self.params['W_proj'], self.params['b_proj']
         W_embed = self.params['W_embed']
         Wx, Wh, b = self.params['Wx'], self.params['Wh'], self.params['b']
+        
         W_vocab, b_vocab = self.params['W_vocab'], self.params['b_vocab']
+
+        N = features.shape[0]
+        D, H = Wx.shape
+        H /= 4
+       
+        captions = self._null * np.ones((N, max_length), dtype=np.int32)
 
         ###########################################################################
         # TODO: Implement test-time sampling for the model. You will need to      #
@@ -221,7 +233,10 @@ class CaptioningRNN(object):
         for i in range(max_length):
             word_embed, cache_word_embed = word_embedding_forward(prev_word, W_embed) # word embedding
             ww = word_embed.reshape(N,word_embed.shape[2])
-            next_h, _ = rnn_step_forward(ww, prev_h, Wx, Wh, b) # learn next hidden state
+            if self.cell_type == "rnn":
+                next_h, _ = rnn_step_forward(ww, prev_h, Wx, Wh, b) # learn next hidden state
+            elif self.cell_type == "lstm":
+                next_h, _, _ = lstm_step_forward(ww, prev_h, np.zeros((N, H)), Wx, Wh, b) # learn next hidden state
 
             scores = next_h.dot(W_vocab) + b_vocab # raw unnormalized log scores for predicting next word
             prev_word = scores.argmax(axis=1).reshape(N,1) # next word indices in word_to_idx dict
